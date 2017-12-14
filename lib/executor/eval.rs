@@ -13,6 +13,8 @@ fn sign_extend(constant: &il::Constant) -> i64 {
     }
 }
 
+/// Evaluate an `il::Expression` where all terminals are `il::Constant`, and
+/// return the resulting `il::Constant`.
 pub fn eval(expr: &il::Expression) -> Result<il::Constant> {
 
     match *expr {
@@ -143,4 +145,31 @@ pub fn eval(expr: &il::Expression) -> Result<il::Constant> {
             }
         }
     }
+}
+
+
+#[test]
+fn add() {
+    let lhs = il::expr_const(0x570000, 32);
+    let rhs = il::expr_const(0x703c, 32);
+    let expr = il::Expression::add(lhs, rhs).unwrap();
+    assert_eq!(eval(&expr).unwrap(), il::const_(0x57703c, 32));
+
+    let lhs = il::expr_const(0xffffffff, 32);
+    let rhs = il::expr_const(0x1, 32);
+    let expr = il::Expression::add(lhs, rhs).unwrap();
+    assert_eq!(eval(&expr).unwrap(), il::const_(0, 32));
+}
+
+#[test]
+fn cmplts() {
+    let lhs = il::expr_const(0xffffffff, 32);
+    let rhs = il::expr_const(0, 32);
+    let expr = il::Expression::cmplts(lhs, rhs).unwrap();
+    assert_eq!(eval(&expr).unwrap(), il::const_(1, 1));
+
+    let lhs = il::expr_const(0, 32);
+    let rhs = il::expr_const(0xffffffff, 32);
+    let expr = il::Expression::cmplts(lhs, rhs).unwrap();
+    assert_eq!(eval(&expr).unwrap(), il::const_(0, 1));
 }

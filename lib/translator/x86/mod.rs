@@ -1,10 +1,9 @@
 //! Capstone-based translator for 32-bit x86.
 
-use capstone_rust::{capstone, capstone_sys};
+use falcon_capstone::{capstone, capstone_sys};
 use error::*;
 use il::*;
 use translator::{Translator, BlockTranslationResult};
-use types::Endian;
 
 
 mod semantics;
@@ -38,10 +37,6 @@ fn raise_fp(control_flow_graph: &mut ControlFlowGraph) -> Result<()> {
 
 
 impl Translator for X86 {
-    fn endian(&self) -> Endian {
-        Endian::Little
-    }
-
     fn translate_block(&self, bytes: &[u8], address: u64) -> Result<BlockTranslationResult> {
         let cs = match capstone::Capstone::new(capstone::cs_arch::CS_ARCH_X86, capstone::CS_MODE_32) {
             Ok(cs) => cs,
@@ -50,8 +45,8 @@ impl Translator for X86 {
 
         cs.option(capstone::cs_opt_type::CS_OPT_DETAIL, capstone::cs_opt_value::CS_OPT_ON).unwrap();
 
-        // our graph for the block which we will build iteratively with each instruction
-        let mut block_graph = ControlFlowGraph::new();
+        // A vec which holds each lifted instruction in this block.
+        let mut block_graphs: Vec<(u64, ControlFlowGraph)> = Vec::new();
 
         // the length of this block in bytes
         let mut length: usize = 0;
@@ -257,7 +252,7 @@ impl Translator for X86 {
 
                 instruction_graph.set_address(Some(instruction.address));
 
-                block_graph.append(&instruction_graph)?;
+                block_graphs.push((instruction.address, instruction_graph));
 
                 length += instruction.size as usize;
 
@@ -322,6 +317,6 @@ impl Translator for X86 {
             offset += instruction.size as usize;
         }
 
-        Ok(BlockTranslationResult::new(block_graph, address, length, successors))
+        Ok(BlockTranslationResult::new(block_graphs, address, length, successors))
     }
 }

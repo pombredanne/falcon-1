@@ -148,40 +148,27 @@ impl Block {
     }
 
     /// Adds a store operation to the end of this block.
-    pub fn store(&mut self, dst: Array, address: Expression, src: Expression) {
+    pub fn store(&mut self, address: Expression, src: Expression) {
         let index = self.new_instruction_index();
-        self.push(Instruction::store(index, dst, address, src))
+        self.push(Instruction::store(index, address, src))
     }
 
     /// Adds a load operation to the end of this block.
-    pub fn load(&mut self, dst: Scalar, address: Expression, src: Array) {
+    pub fn load(&mut self, dst: Scalar, address: Expression) {
         let index = self.new_instruction_index();
-        self.push(Instruction::load(index, dst, address, src));
+        self.push(Instruction::load(index, dst, address));
     }
 
     /// Adds a conditional branch operation to the end of this block.
-    pub fn brc(&mut self, dst: Expression, condition: Expression) {
+    pub fn branch(&mut self, dst: Expression) {
         let index = self.new_instruction_index();
-        self.push(Instruction::brc(index, dst, condition));
-    }
-
-    /// Adds a phi operation to the end of this block.
-    pub fn phi(&mut self, dst: MultiVar, src: Vec<MultiVar>) {
-        let index = self.new_instruction_index();
-        self.push(Instruction::phi(index, dst, src));
+        self.push(Instruction::branch(index, dst));
     }
 
     /// Adds a raise operation to the end of this block.
     pub fn raise(&mut self, expr: Expression) {
         let index = self.new_instruction_index();
         self.push(Instruction::raise(index, expr));
-    }
-
-    /// Prepends an operation to the beginning of this block
-    pub fn prepend_phi(&mut self, dst: MultiVar, src: Vec<MultiVar>) {
-        let index = self.new_instruction_index();
-        let phi = Instruction::phi(index, dst, src);
-        self.instructions.insert(0, phi);
     }
 }
 

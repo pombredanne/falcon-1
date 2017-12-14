@@ -1,20 +1,40 @@
 //! Loading executable binaries into Falcon
-
-pub mod elf;
-pub mod json;
-pub mod memory;
+//!
+//! ```
+//! # use falcon::error::*;
+//! use falcon::loader::Elf;
+//! use falcon::loader::Loader;
+//! use std::path::Path;
+//!
+//! # fn example () -> Result<()> {
+//! // Load an elf for analysis
+//! let elf = Elf::from_file(Path::new("test_binaries/simple-0/simple-0"))?;
+//! // Lift a program from the elf
+//! let program = elf.program()?;
+//! for function in program.functions() {
+//!     println!("0x{:08x}: {}", function.address(), function.name());
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 use error::*;
 use il;
+use memory;
 use std::fmt;
 use types::Architecture;
 
+mod elf;
+mod json;
+
+pub use self::elf::*;
+pub use self::json::*;
 
 /// A declared entry point for a function.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionEntry {
     address: u64,
-    name: String
+    name: Option<String>
 }
 
 
@@ -23,17 +43,9 @@ impl FunctionEntry {
     ///
     /// If no name is provided: `sup_{:X}` will be used to name the function.
     pub fn new(address: u64, name: Option<String>) -> FunctionEntry {
-        match name {
-            Some(name) => FunctionEntry {
-                address: address,
-                name: name
-            },
-            None => {
-                FunctionEntry {
-                    address: address,
-                    name: format!("sub_{:X}", address)
-                }
-            }
+        FunctionEntry {
+            address: address,
+            name: name
         }
     }
 
@@ -43,7 +55,7 @@ impl FunctionEntry {
     }
 
     /// Get the name for this `FunctionEntry`.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &Option<String> {
         &self.name
     }
 }
@@ -51,7 +63,10 @@ impl FunctionEntry {
 
 impl fmt::Display for FunctionEntry {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} -> {:X}", self.name, self.address)
+        match self.name {
+            Some(ref name) => write!(f, "{} -> {:X}", name, self.address),
+            None => write!(f, "{:X}", self.address)
+        }
     }
 }
 
@@ -59,7 +74,7 @@ impl fmt::Display for FunctionEntry {
 /// Generic trait for all loaders
 pub trait Loader: Clone {
     /// Get a model of the memory contained in the binary
-    fn memory(&self) -> Result<memory::Memory>;
+    fn memory(&self) -> Result<memory::backing::Memory>;
 
     /// Get addresses for known function entries
     fn function_entries(&self) -> Result<Vec<FunctionEntry>>;
@@ -78,7 +93,7 @@ pub trait Loader: Clone {
     }
 
     /// Lift executable into an il::Program
-    fn to_program(&self) -> Result<il::Program> {
+    fn program(&self) -> Result<il::Program> {
         // Get out architecture-specific translator
         let translator = self.architecture()?.translator();
 
@@ -89,10 +104,14 @@ pub trait Loader: Clone {
 
         for function_entry in self.function_entries()? {
             let address = function_entry.address();
-            trace!("adding function at {:X}", address);
-            let mut function = translator.translate_function(&memory, address)?;
-            function.set_name(Some(function_entry.name().to_string()));
-            program.add_function(function);
+            // Ensure this memory is marked executable
+            if memory.permissions(address)
+                     .map_or(false, |p|
+                        p.contains(memory::MemoryPermissions::EXECUTE)) {
+                let mut function = translator.translate_function(&memory, address)?;
+                function.set_name(function_entry.name().clone());
+                program.add_function(function);
+            }
         }
 
         Ok(program)

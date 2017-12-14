@@ -1,15 +1,18 @@
 //! An `Instruction` holds an `Operation`.
-//!
-//! An `instruction` gives location to an `Operation`.
-//!
-//! An `Instruction` is created automatically when calling various `Operation`-type functions
-//! over a `Block`, such as `Block::assign`.
 
 use il::*;
 use std::fmt;
 
 /// An `Instruction` represents location, and non-semantical information about
 /// an `Operation`.
+///
+/// An `instruction` gives location to an `Operation`.
+///
+/// Methods are provided to create individual instructions, as all uses cases
+/// cannot be seen beforehand. However, it is generally poor-form to create
+/// an `Instruction` manually. You should use the methods on `Block` which 
+/// correspond to the `Operation` you wish to create, and the `Instruction`
+/// will be created automatically.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Instruction {
     operation: Operation,
@@ -20,7 +23,13 @@ pub struct Instruction {
 
 
 impl Instruction {
-    pub(crate) fn new(index: u64, operation: Operation) -> Instruction {
+    /// Create a new instruction with the given index and operation.
+    ///
+    /// # Warning
+    /// You almost never want to call this function. You should use the methods
+    /// on `il::Block` which correspond to the operation you wish to append to
+    /// that block.
+    pub fn new(index: u64, operation: Operation) -> Instruction {
         Instruction {
             operation: operation,
             index: index,
@@ -30,48 +39,57 @@ impl Instruction {
     }
 
 
-    pub(crate) fn assign(index: u64, dst: Scalar, src: Expression) -> Instruction {
+    /// Create a new `Assign` instruction.
+    ///
+    /// # Warning
+    /// You almost never want to call this function. You should use the
+    /// `assign` method on `il::Block` instead.
+    pub fn assign(index: u64, dst: Scalar, src: Expression) -> Instruction {
         Instruction::new(index, Operation::assign(dst, src))
     }
 
 
-    pub(crate) fn store(
-        instruction_index: u64,
-        dst: Array,
-        dst_index: Expression,
-        src: Expression
-    ) -> Instruction {
+    /// Create a new `Store` instruction.
+    ///
+    /// # Warning
+    /// You almost never want to call this function. You should use the
+    /// `store` method on `il::Block` instead.
+    pub fn store(instruction_index: u64, index: Expression, src: Expression)
+        -> Instruction {
 
-        Instruction::new(instruction_index, Operation::store(dst, dst_index, src))
+        Instruction::new(instruction_index, Operation::store(index, src))
     }
 
 
-    pub(crate) fn load(
-        instruction_index: u64,
-        dst: Scalar,
-        src_index: Expression,
-        src: Array
-    ) -> Instruction {
+    /// Create a new `Load` instruction.
+    ///
+    /// # Warning
+    /// You almost never want to call this function. You should use the
+    /// `load` method on `il::Block` instead.
+    pub fn load(instruction_index: u64, dst: Scalar, index: Expression)
+        -> Instruction {
 
-        Instruction::new(instruction_index, Operation::load(dst, src_index, src))
+        Instruction::new(instruction_index, Operation::load(dst, index))
     }
 
 
-    pub(crate) fn brc(index: u64, target: Expression, condition: Expression)
-    -> Instruction {
+    /// Create a new `Brc` instruction.
+    ///
+    /// # Warning
+    /// You almost never want to call this function. You should use the
+    /// `brc` method on `il::Block` instead.
+    pub fn branch(index: u64, target: Expression) -> Instruction {
 
-        Instruction::new(index, Operation::brc(target, condition))
+        Instruction::new(index, Operation::branch(target))
     }
 
 
-    pub(crate) fn phi(index: u64, dst: MultiVar, src: Vec<MultiVar>)
-    -> Instruction {
-
-        Instruction::new(index, Operation::phi(dst, src))
-    }
-
-
-    pub(crate) fn raise(index: u64, expr: Expression) -> Instruction {
+    /// Create a new `Raise` instruction.
+    ///
+    /// # Warning
+    /// You almost never want to call this function. You should use the
+    /// `raise` method on `il::Block` instead.
+    pub fn raise(index: u64, expr: Expression) -> Instruction {
         Instruction::new(index, Operation::Raise { expr: expr })
     }
 
@@ -107,18 +125,8 @@ impl Instruction {
     }
 
     /// Returns `true` if the `Operation` for this `Instruction` is `Operation::Brc`
-    pub fn is_brc(&self) -> bool {
-        if let Operation::Brc{..} = self.operation {
-            true
-        }
-        else {
-            false
-        }
-    }
-
-    /// Returns `true` if the `Operation` for this `Instruction` is `Operation::Phi`
-    pub fn is_phi(&self) -> bool {
-        if let Operation::Phi{..} = self.operation {
+    pub fn is_branch(&self) -> bool {
+        if let Operation::Branch{..} = self.operation {
             true
         }
         else {
@@ -190,32 +198,26 @@ impl Instruction {
         }
     }
 
-    /// Get the `Variable` which will be written by this `Instruction`.
-    ///
-    /// This is a convenience function around `Operation::variable_written`.
-    pub fn variable_written(&self) -> Option<&Variable> {
-        self.operation.variable_written()
+    /// Get the `Scalar` which will be written by this `Instruction`.
+    pub fn scalar_written(&self) -> Option<&Scalar> {
+        self.operation.scalar_written()
     }
 
-    /// Get a mutable reference to the `Variable` which will be written by this `Instruction`.
-    ///
-    /// This is a convenience function around `Operation::variable_written_mut`.
-    pub fn variable_written_mut(&mut self) -> Option<&mut Variable> {
-        self.operation.variable_written_mut()
+    /// Get a mutable reference to the `Scalar` which will be written by this
+    /// `Instruction`.
+    pub fn scalar_written_mut(&mut self) -> Option<&mut Scalar> {
+        self.operation.scalar_written_mut()
     }
 
-    /// Get a Vec of each `Variable` read by this `Instruction`.
-    ///
-    /// This is a convenience function around `Operation::variables_read`.
-    pub fn variables_read(&self) -> Vec<&Variable> {
-        self.operation.variables_read()
+    /// Get a Vec of each `Scalar` read by this `Instruction`.
+    pub fn scalars_read(&self) -> Vec<&Scalar> {
+        self.operation.scalars_read()
     }
 
-    /// Get a Vec of mutable references for each `Variable` read by this `Instruction`.
-    ///
-    /// This is a convenience function around `Operation::variables_read_mut`.
-    pub fn variables_read_mut(&mut self) -> Vec<&mut Variable> {
-        self.operation.variables_read_mut()
+    /// Get a Vec of mutable references for each `Scalar` read by this
+    /// `Instruction`.
+    pub fn scalars_read_mut(&mut self) -> Vec<&mut Scalar> {
+        self.operation.scalars_read_mut()
     }
 }
 

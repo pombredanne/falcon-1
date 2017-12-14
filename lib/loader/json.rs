@@ -1,25 +1,24 @@
-//! Load an executable from a JSON-serialized format.
-//!
-//! This module is useful for exporting executables from things like Binary Ninja.
-//!
-//! For an example of the JSON-format, see the _binaryninja-falcon_ directory in _scripts_.
+//! Experimental loader which takes a program specification in Json form.
 
 use base64;
-use error::*;
 use loader::*;
-use loader::memory::*;
+use memory::backing::*;
+use memory::MemoryPermissions;
 use serde_json;
 use serde_json::Value;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-/// An executable loaded from the JSON-serializable format.
-#[derive(Clone, Debug)]
+/// Experimental loader which takes a program specification in Json form.
+///
+/// See the binary ninja script for an example use.
+#[derive(Clone)]
 pub struct Json {
     function_entries: Vec<FunctionEntry>,
     memory: Memory,
-    architecture: Architecture
+    architecture: Architecture,
+    entry: u64
 }
 
 
@@ -42,6 +41,11 @@ impl Json {
                 }
             }
             _ => bail!("architecture missing")
+        };
+
+        let entry = match root["entry"] {
+            Value::Number(ref number) => number.as_u64().unwrap(),
+            _ => bail!("entry missing")
         };
 
         let mut function_entries = Vec::new();
@@ -67,7 +71,7 @@ impl Json {
             bail!("functions missing");
         }
 
-        let mut memory = Memory::new();
+        let mut memory = Memory::new(architecture.endian());
         if let Value::Array(ref segments) = root["segments"] {
             for segment in segments {
                 let address = match segment["address"] {
@@ -83,7 +87,7 @@ impl Json {
                     _ => bail!("bytes missing for segment")
                 };
 
-                memory.add_segment(MemorySegment::new(address, bytes, ALL));
+                memory.set_memory(address, bytes, MemoryPermissions::ALL);
             }
         }
         else {
@@ -93,7 +97,8 @@ impl Json {
         Ok(Json{
             function_entries: function_entries,
             memory: memory,
-            architecture: architecture
+            architecture: architecture,
+            entry: entry
         })
     }
 }
@@ -112,12 +117,7 @@ impl Loader for Json {
 
 
     fn program_entry(&self) -> u64 {
-        for entry in &self.function_entries {
-            if entry.name() == "main" {
-                return entry.address()
-            }
-        }
-        0
+        self.entry
     }
 
 

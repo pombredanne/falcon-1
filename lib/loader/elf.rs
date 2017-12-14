@@ -1,14 +1,15 @@
 //! ELF Linker/Loader
 
-use error::*;
 use goblin;
 use goblin::Hint;
 use loader::*;
-use loader::memory::*;
+use memory::backing::Memory;
+use memory::MemoryPermissions;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use types::Endian;
 
 // http://stackoverflow.com/questions/37678698/function-to-build-a-fixed-sized-array-from-slice/37679019#37679019
 use std::convert::AsMut;
@@ -29,7 +30,7 @@ const DEFAULT_LIB_BASE: u64 = 0x8000_0000;
 const LIB_BASE_STEP: u64    = 0x0400_0000;
 
 
-/// Loads and links multiple ELFs together
+/// Loader which links together multiple Elf files. Currently only X86 supported.
 #[derive(Clone, Debug)]
 pub struct ElfLinker {
     /// The filename (path included) of the file we're loading.
@@ -51,10 +52,23 @@ impl ElfLinker {
     /// Takes a path to an Elf and loads the Elf, its dependencies, and links
     /// them together.
     pub fn new(filename: &Path) -> Result<ElfLinker> {
+        let mut file = File::open(filename)?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        let mut endian = Endian::Big;
+        if let goblin::Object::Elf(elf_peek) = goblin::Object::parse(&buf)? {
+            if elf_peek.header.endianness()?.is_little() {
+                endian = Endian::Little;
+            }
+        }
+        else {
+            bail!(format!("{} was not an Elf", filename.to_str().unwrap()));
+        }
+
         let mut elf_linker = ElfLinker {
             filename: filename.to_owned(),
             loaded: BTreeMap::new(),
-            memory: Memory::new(),
+            memory: Memory::new(endian),
             symbols: BTreeMap::new(),
             next_lib_address: DEFAULT_LIB_BASE,
             user_functions: Vec::new(),
@@ -93,8 +107,10 @@ impl ElfLinker {
 
 
         // Update our memory map based on what's in the Elf
-        for segment in elf.memory()?.segments() {
-            self.memory.add_segment(segment.1.clone());
+        for (address, section) in elf.memory()?.sections() {
+            self.memory.set_memory(*address,
+                                   section.data().to_owned(),
+                                   section.permissions());
         }
 
         // Add this Elf to the loaded Elfs
@@ -160,7 +176,7 @@ impl ElfLinker {
                         Some(v) => v.to_owned() as u32,
                         None => bail!("Could not resolve symbol {}", sym_name)
                     };
-                    self.memory.set_u32_le(
+                    self.memory.set32(
                         reloc.r_offset as u64 + elf.base_address(),
                         value
                     )?;
@@ -186,7 +202,7 @@ impl ElfLinker {
                             continue
                         }
                     };
-                    self.memory.set_u32_le(
+                    self.memory.set32(
                         reloc.r_offset as u64 + elf.base_address(),
                         value
                     )?;
@@ -198,20 +214,20 @@ impl ElfLinker {
                         Some(v) => v.to_owned() as u32,
                         None => bail!("Could not resolve symbol {}", sym_name)
                     };
-                    self.memory.set_u32_le(
+                    self.memory.set32(
                         reloc.r_offset as u64 + elf.base_address(),
                         value
                     )?;
                 },
                 goblin::elf::reloc::R_386_RELATIVE => {
-                    let value = self.memory.get_u32_le(reloc.r_offset as u64 + elf.base_address());
+                    let value = self.memory.get32(reloc.r_offset as u64 + elf.base_address());
                     let value = match value {
                         Some(value) => elf.base_address() as u32 + value,
                         None => bail!("Invalid address for R_386_RELATIVE {:?}:{:x}",
                                       self.filename,
                                       reloc.r_offset)
                     };
-                    self.memory.set_u32_le(reloc.r_offset as u64 + elf.base_address(), value)?;
+                    self.memory.set32(reloc.r_offset as u64 + elf.base_address(), value)?;
                 },
                 goblin::elf::reloc::R_386_GOTPC => {
                     bail!("R_386_GOT_PC");
@@ -239,7 +255,7 @@ impl ElfLinker {
 
 
 impl Loader for ElfLinker {
-    fn memory(&self) -> Result<memory::Memory> {
+    fn memory(&self) -> Result<Memory> {
         Ok(self.memory.clone())
     }
 
@@ -309,7 +325,7 @@ impl ElfSymbol {
 }
 
 
-/// Loads a single ELf.
+/// Loader for a single ELf file.
 #[derive(Clone, Debug)]
 pub struct Elf {
     base_address: u64,
@@ -444,7 +460,7 @@ impl Elf {
 impl Loader for Elf {
     fn memory(&self) -> Result<Memory> {
         let elf = self.elf();
-        let mut memory = Memory::new();
+        let mut memory = Memory::new(self.architecture()?.endian());
 
         for ph in elf.program_headers {
             if ph.p_type == goblin::elf::program_header::PT_LOAD {
@@ -458,24 +474,20 @@ impl Loader for Elf {
                     bytes.append(&mut vec![0; (ph.p_memsz - ph.p_filesz) as usize]);
                 }
 
-                let mut permissions = NONE;
+                let mut permissions = memory::MemoryPermissions::NONE;
                 if ph.p_flags & goblin::elf::program_header::PF_R != 0 {
-                    permissions |= READ;
+                    permissions |= MemoryPermissions::READ;
                 }
                 if ph.p_flags & goblin::elf::program_header::PF_W != 0 {
-                    permissions |= WRITE;
+                    permissions |= MemoryPermissions::WRITE;
                 }
                 if ph.p_flags & goblin::elf::program_header::PF_X != 0 {
-                    permissions |= EXECUTE;
+                    permissions |= MemoryPermissions::EXECUTE;
                 }
-                
-                let segment = MemorySegment::new(
-                    ph.p_vaddr + self.base_address,
-                    bytes,
-                    permissions
-                );
 
-                memory.add_segment(segment);
+                memory.set_memory(ph.p_vaddr + self.base_address,
+                                  bytes,
+                                  permissions);
             }
         }
 
@@ -549,7 +561,10 @@ impl Loader for Elf {
             Ok(Architecture::X86)
         }
         else if elf.header.e_machine == goblin::elf::header::EM_MIPS {
-            Ok(Architecture::Mips)
+            match elf.header.endianness()? {
+                goblin::container::Endian::Big => Ok(Architecture::Mips),
+                goblin::container::Endian::Little => Ok(Architecture::Mipsel),
+            }
         }
         else {
             Err("Unsupported Arcthiecture".into())

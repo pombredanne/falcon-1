@@ -18,7 +18,7 @@ use il::*;
 use std::fmt;
 
 /// A location applied to a `Program`.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RefProgramLocation<'p> {
     function: &'p Function,
     function_location: RefFunctionLocation<'p>
@@ -69,13 +69,15 @@ impl<'p> RefProgramLocation<'p> {
         &self.function_location
     }
 
-    /// If this `RefProgramLocation` is referencing an `Instruction`, get that
+    /// If this `RefProgramLocation` references a `Block`, get that `Block`.
+    pub fn block(&self) -> Option<&Block> {
+        self.function_location.block()
+    }
+
+    /// If this `RefProgramLocation` references an `Instruction`, get that
     /// `Instruction`.
     pub fn instruction(&self) -> Option<&Instruction> {
-        match self.function_location {
-            RefFunctionLocation::Instruction(_, instruction) => Some(instruction),
-            _ => None
-        }
+        self.function_location.instruction()
     }
 
     /// If this `RefProgramLocation` is referencing an `Instruction` which has
@@ -125,7 +127,80 @@ impl<'p> RefProgramLocation<'p> {
     }
 
 
-    fn advance_instruction_forward(&self, block: &'p Block, instruction: &Instruction)
+    fn instruction_backward(&self, block: &'p Block, instruction: &Instruction)
+    -> Result<Vec<RefProgramLocation<'p>>> {
+        let instructions = block.instructions();
+        for i in (0..instructions.len()).rev() {
+            if instructions[i].index() == instruction.index() {
+                if i > 0 {
+                    let instruction = &instructions[i - 1];
+                    return Ok(vec![RefProgramLocation::new(self.function,
+                        RefFunctionLocation::Instruction(block, instruction))]);
+                }
+                let edges = match self.function
+                                      .control_flow_graph()
+                                      .edges_in(block.index()) {
+                    Some(edges) => edges,
+                    None => bail!("Could not find block {} in function {:?}",
+                        block.index(),
+                        self.function.index())
+                };
+                let mut locations = Vec::new();
+                for edge in edges {
+                    locations.push(RefProgramLocation::new(self.function,
+                        RefFunctionLocation::Edge(edge)));
+                }
+                return Ok(locations);
+            }
+        }
+
+        Err(format!("Could not find instruction {} in block {} in function {:?}",
+            instruction.index(),
+            block.index(),
+            self.function.index()).into())
+    }
+
+
+    fn edge_backward(&self, edge: &'p Edge) -> Result<Vec<RefProgramLocation<'p>>> {
+        let block = match self.function.block(edge.head()) {
+            Some(block) => block,
+            None => bail!("Could not find block {} in function {:?}",
+                edge.head(), self.function.index())
+        };
+
+        let instructions = block.instructions();
+        if instructions.is_empty() {
+            Ok(vec![RefProgramLocation::new(self.function,
+                RefFunctionLocation::EmptyBlock(block))])
+        }
+        else {
+            Ok(vec![RefProgramLocation::new(self.function,
+                RefFunctionLocation::Instruction(block, instructions.last().unwrap()))])
+        }
+    }
+
+
+    fn empty_block_backward(&self, block: &'p Block)
+    -> Result<Vec<RefProgramLocation<'p>>> {
+
+        let edges = match self.function
+                              .control_flow_graph()
+                              .edges_in(block.index()) {
+            Some(edges) => edges,
+            None => bail!("Could not find block {} in function {:?}",
+                block.index(), self.function.index())
+        };
+
+        let mut locations = Vec::new();
+        for edge in edges {
+            locations.push(RefProgramLocation::new(self.function,
+                RefFunctionLocation::Edge(edge)));
+        }
+        Ok(locations)
+    }
+
+
+    fn instruction_forward(&self, block: &'p Block, instruction: &Instruction)
     -> Result<Vec<RefProgramLocation<'p>>> {
 
         let instructions = block.instructions();
@@ -144,33 +219,31 @@ impl<'p> RefProgramLocation<'p> {
                                       .control_flow_graph()
                                       .edges_out(block.index()) {
                     Some(edges) => edges,
-                    None => bail!("Could not find block {} in function {}",
+                    None => bail!("Could not find block {} in function {:?}",
                         block.index(),
-                        self.function.index().unwrap())
+                        self.function.index())
                 };
                 let mut locations = Vec::new();
                 for edge in edges {
-                    locations.push(RefProgramLocation::new(&self.function,
+                    locations.push(RefProgramLocation::new(self.function,
                         RefFunctionLocation::Edge(edge)));
                 }
-                return Ok(locations)
+                return Ok(locations);
             }
         }
 
-        Err(format!("Could not find instruction {} in block {} in function {}",
+        Err(format!("Could not find instruction {} in block {} in function {:?}",
             instruction.index(),
             block.index(), 
-            self.function.index().unwrap()).into())
+            self.function.index()).into())
     }
 
 
-    fn advance_edge_forward(&self, edge: &'p Edge)
-    -> Result<Vec<RefProgramLocation<'p>>> {
-
+    fn edge_forward(&self, edge: &'p Edge) -> Result<Vec<RefProgramLocation<'p>>> {
         let block = match self.function.block(edge.tail()) {
             Some(block) => block,
-            None => bail!("Could not find block {} in function {}",
-                edge.tail(), self.function.index().unwrap())
+            None => bail!("Could not find block {} in function {:?}",
+                edge.tail(), self.function.index())
         };
 
         let instructions = block.instructions();
@@ -185,20 +258,19 @@ impl<'p> RefProgramLocation<'p> {
     }
 
 
-    fn advance_empty_block_forward(&self, block: &'p Block)
+    fn empty_block_forward(&self, block: &'p Block)
     -> Result<Vec<RefProgramLocation<'p>>> {
 
         let edges = match self.function
                                .control_flow_graph()
-                               .edges_out(block.index()){
+                               .edges_out(block.index()) {
             Some(edges) => edges,
-            None => bail!("Could not find block {} in function {}",
-                block.index(), self.function.index().unwrap())
+            None => bail!("Could not find block {} in function {:?}",
+                block.index(), self.function.index())
         };
 
         let mut locations = Vec::new();
         for edge in edges {
-
             locations.push(RefProgramLocation::new(self.function,
                 RefFunctionLocation::Edge(edge)));
         }
@@ -209,16 +281,26 @@ impl<'p> RefProgramLocation<'p> {
 
     /// Advance the `RefProgramLocation` forward.
     ///
-    /// This causes the underlying `RefFunctionLocation` to reference the next
-    /// `RefFunctionLocation`. This does _not_ follow targets of
-    /// `Operation::Brc`.
-    pub fn advance_forward(&self) -> Result<Vec<RefProgramLocation<'p>>> {
+    /// This does _not_ follow targets of `Operation::Brc`.
+    pub fn forward(&self) -> Result<Vec<RefProgramLocation<'p>>> {
         match self.function_location {
-            // We are currently at an instruction
             RefFunctionLocation::Instruction(block, instruction) => 
-                self.advance_instruction_forward(block, instruction),
-            RefFunctionLocation::Edge(edge) => self.advance_edge_forward(edge),
-            RefFunctionLocation::EmptyBlock(block) =>self.advance_empty_block_forward(block)
+                self.instruction_forward(block, instruction),
+            RefFunctionLocation::Edge(edge) => self.edge_forward(edge),
+            RefFunctionLocation::EmptyBlock(block) =>self.empty_block_forward(block)
+        }
+    }
+
+
+    /// Advance the `RefProgramLocation` backward.
+    ///
+    /// This does _not_ follow targets of `Operation::Brc`.
+    pub fn backward(&self) -> Result<Vec<RefProgramLocation<'p>>> {
+        match self.function_location {
+            RefFunctionLocation::Instruction(block, instruction) =>
+                self.instruction_backward(block, instruction),
+            RefFunctionLocation::Edge(edge) => self.edge_backward(edge),
+            RefFunctionLocation::EmptyBlock(block) => self.empty_block_backward(block)
         }
     }
 }
@@ -226,13 +308,16 @@ impl<'p> RefProgramLocation<'p> {
 
 impl<'f> fmt::Display for RefProgramLocation<'f> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "0x{:x}:{}", self.function.index().unwrap(), self.function_location)
+        match self.function.index() {
+            Some(index) => write!(f, "0x{:x}:{}", index, self.function_location),
+            None => write!(f, "{}", self.function_location)
+        }
     }
 }
 
 
 /// A location applied to a `Function`.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum RefFunctionLocation<'f> {
     Instruction(&'f Block, &'f Instruction),
     Edge(&'f Edge),
@@ -286,14 +371,18 @@ impl<'f> fmt::Display for RefFunctionLocation<'f> {
 /// A location independent of any specific instance of `Program`.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct ProgramLocation {
-    function_index: u64,
+    function_index: Option<u64>,
     function_location: FunctionLocation
 }
 
 
 impl ProgramLocation {
     /// Create a new `ProgramLocation` from a function index and `FunctionLocation`
-    pub fn new(function_index: u64, function_location: FunctionLocation) -> ProgramLocation {
+    pub fn new(
+        function_index: Option<u64>,
+        function_location: FunctionLocation
+    ) -> ProgramLocation {
+
         ProgramLocation {
             function_index: function_index,
             function_location: function_location
@@ -304,7 +393,12 @@ impl ProgramLocation {
     /// "Apply" this `ProgramLocation` to a `Program`, returning a
     /// `RefProgramLocation`.
     pub fn apply<'p>(&self, program: &'p Program) -> Option<RefProgramLocation<'p>> {
-        let function = match program.function(self.function_index) {
+        if self.function_index.is_none() {
+            return None;
+        }
+        let function_index = self.function_index.unwrap();
+
+        let function = match program.function(function_index) {
             Some(function) => function,
             None => { return None; }
         };
@@ -338,7 +432,7 @@ impl ProgramLocation {
 impl<'p> From<RefProgramLocation<'p>> for ProgramLocation {
     fn from(program_location: RefProgramLocation) -> ProgramLocation {
         ProgramLocation {
-            function_index: program_location.function().index().unwrap(),
+            function_index: program_location.function().index(),
             function_location: program_location.function_location.into()
         }
     }
@@ -347,7 +441,10 @@ impl<'p> From<RefProgramLocation<'p>> for ProgramLocation {
 
 impl fmt::Display for ProgramLocation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "0x{:x}:{}", self.function_index, self.function_location)
+        match self.function_index {
+            Some(function_index) => write!(f, "0x{:x}:{}", function_index, self.function_location),
+            None => write!(f, "{}", self.function_location)
+        }
     }
 }
 

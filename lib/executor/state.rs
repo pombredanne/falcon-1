@@ -1,51 +1,61 @@
+/// A concrete state for execution over Falcon IL.
+
 use executor::*;
-use executor::memory::*;
 use executor::successor::*;
 use std::collections::BTreeMap;
 
+/// A concrete `State`.
 #[derive(Debug, Clone)]
-pub struct Engine {
-    scalars: BTreeMap<String, il::Expression>,
-    memory: Memory,
+pub struct State<'e> {
+    scalars: BTreeMap<String, il::Constant>,
+    memory: Memory<'e>,
 }
 
 
-impl Engine {
-    pub fn new(memory: Memory) -> Engine {
-        Engine {
+impl<'e> State<'e> {
+    /// Create a new `State` from the given memory model.
+    pub fn new(memory: Memory<'e>) -> State<'e> {
+        State {
             scalars: BTreeMap::new(),
             memory: memory
         }
     }
 
 
+    /// Retrieve the `Memory` associated with this `State`.
     pub fn memory(&self) -> &Memory {
         &self.memory
     }
 
 
-    pub fn memory_mut(&mut self) -> &mut Memory {
+    /// Retrieve a mutable reference to the `Memory` associated with this
+    /// `State`.
+    pub fn memory_mut(&'e mut self) -> &'e mut Memory {
         &mut self.memory
     }
 
 
-    pub fn set_scalar<S: Into<String>>(&mut self, name: S, value: il::Expression) {
+    /// Set the value of the given scalar to a concrete value.
+    pub fn set_scalar<S: Into<String>>(&mut self, name: S, value: il::Constant) {
         self.scalars.insert(name.into(), value);
     }
 
 
-    pub fn get_scalar(&self, name: &str) -> Option<&il::Expression> {
+    /// Get the concrete value of the given scalar.
+    pub fn get_scalar(&self, name: &str) -> Option<&il::Constant> {
         self.scalars.get(name)
     }
 
 
+    /// Symbolize an expression, replacing all scalars with the concrete values
+    /// stored in this state.
     pub fn symbolize_expression(&self, expression: &il::Expression)
     -> Result<il::Expression> {
 
         Ok(match *expression {
             il::Expression::Scalar(ref scalar) => {
                 match self.scalars.get(scalar.name()) {
-                    Some(expr) => expr.clone(),
+                    Some(expr) => expr.clone().into(),
                     None => il::Expression::Scalar(scalar.clone())
                 }
             },
@@ -108,6 +118,9 @@ impl Engine {
     }
 
 
+    /// Symbolize the given expression, replacing all scalars with the concrete
+    /// values held in this state, and evaluate the expression to a single
+    /// concrete value.
     pub fn symbolize_and_eval(&self, expression: &il::Expression)
     -> Result<il::Constant> {
         let expression = self.symbolize_expression(expression)?;
@@ -115,25 +128,26 @@ impl Engine {
     }
 
 
-    pub fn execute(mut self, operation: &il::Operation) -> Result<Successor> {
+    /// Execute an `il::Operation`, returning the post-execution `State`.
+    pub fn execute(mut self, operation: &il::Operation) -> Result<Successor<'e>> {
         Ok(match *operation {
             il::Operation::Assign { ref dst, ref src } => {
                 let src = self.symbolize_and_eval(src)?;
-                self.set_scalar(dst.name(), src.into());
+                self.set_scalar(dst.name(), src);
                 Successor::new(self, SuccessorType::FallThrough)
             },
-            il::Operation::Store { ref index, ref src, .. } => {
+            il::Operation::Store { ref index, ref src } => {
                 let src = self.symbolize_and_eval(src)?;
                 let index = self.symbolize_and_eval(index)?;
-                self.memory.store(index.value(), src.into())?;
+                self.memory.store(index.value(), src)?;
                 Successor::new(self, SuccessorType::FallThrough)
             },
-            il::Operation::Load { ref dst, ref index, .. } => {
+            il::Operation::Load { ref dst, ref index } => {
                 let index = self.symbolize_and_eval(index)?;
                 let value = self.memory.load(index.value(), dst.bits())?;
                 match value {
                     Some(v) => {
-                        self.set_scalar(dst.name(), v);
+                        self.set_scalar(dst.name(), v.into());
                         Successor::new(self, SuccessorType::FallThrough)
                     },
                     None => {
@@ -141,18 +155,9 @@ impl Engine {
                     }
                 }
             },
-            il::Operation::Brc { ref target, ref condition } => {
-                let condition_result = self.symbolize_and_eval(condition)?;
-                if condition_result.value() == 1 {
-                    let target = self.symbolize_and_eval(target)?;
-                    Successor::new(self, SuccessorType::Branch(target.value()))
-                }
-                else {
-                    Successor::new(self, SuccessorType::FallThrough)
-                }
-            },
-            il::Operation::Phi { .. } => {
-                unimplemented!("Phi unimplemented for concrete execution")
+            il::Operation::Branch { ref target } => {
+                let target = self.symbolize_and_eval(target)?;
+                Successor::new(self, SuccessorType::Branch(target.value()))
             },
             il::Operation::Raise { ref expr } => {
                 Successor::new(self, SuccessorType::Raise(expr.clone()))

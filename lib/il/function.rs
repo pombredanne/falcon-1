@@ -35,6 +35,32 @@ impl Function {
         }
     }
 
+    /// Create a Vec of every RefFunctionLocation for this function.
+    ///
+    /// Convenient for analyses where we need to check every location in a
+    /// function
+    pub fn locations(&self) -> Vec<RefFunctionLocation> {
+        let mut locations = Vec::new();
+
+        for block in self.blocks() {
+            let instructions = block.instructions();
+            if instructions.is_empty() {
+                locations.push(RefFunctionLocation::EmptyBlock(block));
+            }
+            else {
+                for instruction in instructions {
+                    locations.push(RefFunctionLocation::Instruction(block, instruction));
+                }
+            }
+        }
+
+        for edge in self.edges() {
+            locations.push(RefFunctionLocation::Edge(edge))
+        }
+
+        locations
+    }
+
     /// Get the address of this `Function`.
     ///
     /// The address returned will be the address set when this `Function` was created,
@@ -48,14 +74,24 @@ impl Function {
         self.control_flow_graph.block(index)
     }
 
-    /// Return a vec of all `Block` in this `Function`
+    /// Return a Vec of all `Block` in this `Function`
     pub fn blocks(&self) -> Vec<&Block> {
         self.control_flow_graph.blocks()
+    }
+
+    /// Return a Vec of mutable references to all `Block` in this `Function`
+    pub fn blocks_mut(&mut self) -> Vec<&mut Block> {
+        self.control_flow_graph.blocks_mut()
     }
 
     /// Return an `Edge` from this `Function`'s `ControlFlowGraph` by index.
     pub fn edge(&self, head: u64, tail: u64) -> Option<&Edge> {
         self.control_flow_graph.edge(head, tail)
+    }
+
+    /// Return a vec of all `Edge` in this `Function`
+    pub fn edges(&self) -> Vec<&Edge> {
+        self.control_flow_graph.edges()
     }
 
     /// Return the `ControlFlowGraph` for this `Function`.
@@ -88,7 +124,7 @@ impl Function {
     }
 
 
-    pub(crate) fn set_index(&mut self, index: Option<u64>) {
+    pub fn set_index(&mut self, index: Option<u64>) {
         self.index = index;
     }
 }
